@@ -246,58 +246,38 @@
   }
   .shake { animation: errorShake 0.25s ease-in-out; }
 
-  /* Ad & Hint-Granted popups */
-  .hint-popup-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    z-index: 500;
-    align-items: center;
-    justify-content: center;
+  /* Hint cooldown button state */
+  .btn.cooldown {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: #f3f2ef;
+    border-color: #ccc;
+    color: #888;
   }
-  .hint-popup-overlay.show { display: flex; }
 
-  .hint-popup-box {
+  /* Ad iframe box */
+  .ad-box {
+    width: 100%;
+    max-width: 500px;
     background: white;
-    border-radius: 18px;
-    padding: 32px 36px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    margin-top: 12px;
+    overflow: hidden;
+  }
+  .ad-box-label {
+    font-size: 0.72rem;
+    color: #aaa;
     text-align: center;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
-    max-width: 320px;
-    width: 90%;
-    animation: popScale 0.25s ease-out;
-  }
-  @keyframes popScale {
-    from { transform: scale(0.7); opacity: 0; }
-    to   { transform: scale(1);   opacity: 1; }
-  }
-  .hint-popup-box .popup-icon { font-size: 2.6rem; margin-bottom: 10px; }
-  .hint-popup-box h3 { font-size: 1.15rem; font-weight: 700; color: #191919; margin-bottom: 6px; }
-  .hint-popup-box p  { font-size: 0.88rem; color: #555; line-height: 1.5; }
-
-  /* Spinner */
-  .spinner {
-    width: 36px; height: 36px;
-    border: 4px solid #e0e0e0;
-    border-top-color: #0a66c2;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin: 0 auto 14px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Hint granted badge */
-  .granted-badge {
-    display: inline-block;
-    background: linear-gradient(135deg, #f9a825, #ff6f00);
-    color: white;
-    font-size: 0.82rem;
-    font-weight: 700;
-    padding: 3px 12px;
-    border-radius: 20px;
-    margin-top: 8px;
+    padding: 6px 0 2px;
     letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .ad-box iframe {
+    display: block;
+    width: 100%;
+    height: 280px;
+    border: none;
   }
 
   /* Level select modal */
@@ -429,7 +409,7 @@
 
   <div class="controls">
     <button class="btn" onclick="undoMove()">↩ Undo</button>
-    <button class="btn" onclick="giveHint()">💡 Hint</button>
+    <button class="btn" id="hint-btn" onclick="giveHint()">💡 Hint</button>
     <button class="btn primary" onclick="restartLevel()">Restart</button>
   </div>
 
@@ -455,6 +435,12 @@
   </div>
 </div>
 
+<!-- Ad iframe box -->
+<div class="ad-box">
+  <div class="ad-box-label">Advertisement</div>
+  <iframe id="ad-frame" src="https://www.profitablecpmratenetwork.com/d19tw25mqr?key=2225f961c477a92abd8c8b61e54a1223" scrolling="yes" allowfullscreen></iframe>
+</div>
+
 <!-- Win overlay -->
 <div class="win-overlay" id="win-overlay">
   <div class="win-card">
@@ -463,25 +449,6 @@
     <div id="best-badge-wrap"></div>
     <div class="win-time" id="win-time-display">Time: 0:00</div>
     <button class="next-btn" onclick="nextLevel()">Next Level →</button>
-  </div>
-</div>
-
-<!-- Ad loading popup -->
-<div class="hint-popup-overlay" id="ad-popup">
-  <div class="hint-popup-box">
-    <div class="spinner"></div>
-    <h3>Loading Advertisement…</h3>
-    <p>Please view our sponsor page to unlock your hint.<br>You'll be redirected now!</p>
-  </div>
-</div>
-
-<!-- Hint Granted popup -->
-<div class="hint-popup-overlay" id="hint-granted-popup">
-  <div class="hint-popup-box">
-    <div class="popup-icon">🎉</div>
-    <h3>Hint Granted!</h3>
-    <p>Thanks for visiting! Your hint has been unlocked.</p>
-    <span class="granted-badge">✨ Hint Unlocked</span>
   </div>
 </div>
 
@@ -884,78 +851,50 @@ function restartLevel() {
 }
 
 // ─────────────────────────────────────────────
-// HINT FLOW
+// HINT — FREE, INSTANT, WITH 32s COOLDOWN
 // ─────────────────────────────────────────────
-let hintPending = false; // true while waiting for user to return from ad
+let hintCooldownInterval = null;
 
 function giveHint() {
-  if (gameWon || hintPending) return;
+  if (gameWon) return;
+  const btn = document.getElementById('hint-btn');
+  if (btn.classList.contains('cooldown')) return;
 
   const solutionSet = new Set(solution.map(([r, c]) => `${r},${c}`));
 
-  // Collect wrong queen placements
+  // Find wrong queen placements
   const wrongCells = [];
   for (let r = 0; r < N; r++)
     for (let c = 0; c < N; c++)
       if (player[r][c] === 2 && !solutionSet.has(`${r},${c}`))
         wrongCells.push([r, c]);
 
-  // Always go through the ad flow regardless — wrong highlight or new queen both count as a hint
-  startAdFlow(wrongCells);
+  if (wrongCells.length > 0) {
+    highlightWrongCells(wrongCells);
+  } else {
+    executeHint();
+  }
+
+  startHintCooldown(32);
 }
 
-function startAdFlow(wrongCells) {
-  hintPending = true;
+function startHintCooldown(seconds) {
+  const btn = document.getElementById('hint-btn');
+  btn.classList.add('cooldown');
+  let remaining = seconds;
+  btn.textContent = `💡 Hint (${remaining}s)`;
 
-  // Show "Loading Advertisement" popup
-  document.getElementById('ad-popup').classList.add('show');
-
-  // Open sponsor link after short delay
-  setTimeout(() => {
-    window.open('https://www.profitablecpmratenetwork.com/d19tw25mqr?key=2225f961c477a92abd8c8b61e54a1223', '_blank');
-
-    // Hide ad popup after opening tab
-    setTimeout(() => {
-      document.getElementById('ad-popup').classList.remove('show');
-    }, 600);
-
-    // Listen for user returning to this tab
-    const onReturn = () => {
-      if (document.visibilityState === 'visible' && hintPending) {
-        hintPending = false;
-        document.removeEventListener('visibilitychange', onReturn);
-        window.removeEventListener('focus', onFocus);
-        showHintGranted(wrongCells);
-      }
-    };
-    const onFocus = () => {
-      if (hintPending) {
-        hintPending = false;
-        document.removeEventListener('visibilitychange', onReturn);
-        window.removeEventListener('focus', onFocus);
-        showHintGranted(wrongCells);
-      }
-    };
-    document.addEventListener('visibilitychange', onReturn);
-    window.addEventListener('focus', onFocus);
-
-  }, 1200);
-}
-
-function showHintGranted(wrongCells) {
-  const popup = document.getElementById('hint-granted-popup');
-  popup.classList.add('show');
-
-  launchFirecrackers();
-
-  setTimeout(() => {
-    popup.classList.remove('show');
-    if (wrongCells && wrongCells.length > 0) {
-      highlightWrongCells(wrongCells);
+  clearInterval(hintCooldownInterval);
+  hintCooldownInterval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(hintCooldownInterval);
+      btn.classList.remove('cooldown');
+      btn.textContent = '💡 Hint';
     } else {
-      executeHint();
+      btn.textContent = `💡 Hint (${remaining}s)`;
     }
-  }, 2200);
+  }, 1000);
 }
 
 function highlightWrongCells(wrongCells) {
@@ -975,7 +914,6 @@ function highlightWrongCells(wrongCells) {
 
 function executeHint() {
   const board = document.getElementById('game-board');
-
   const candidates = [];
   for (const [sr, sc] of solution)
     if (player[sr][sc] !== 2) candidates.push([sr, sc]);
@@ -987,7 +925,6 @@ function executeHint() {
   player[hr][hc] = 2;
   render();
 
-  // Blue highlight on the placed hint queen
   const cell = board.children[hr * N + hc];
   cell.style.outline = '3px solid #0a66c2';
   cell.style.zIndex = '10';
@@ -1002,66 +939,16 @@ function executeHint() {
 }
 
 // ─────────────────────────────────────────────
-// FIRECRACKER ANIMATION
+// AD IFRAME — reload every 30s (game unaffected)
 // ─────────────────────────────────────────────
-function launchFirecrackers() {
-  const colors = ['#ff4444','#ff8c00','#ffd700','#44dd44','#4488ff','#bb44ff','#ff44bb','#ffffff','#00e5ff'];
-  const total = 60;
-
-  for (let i = 0; i < total; i++) {
-    setTimeout(() => {
-      const side = i % 2 === 0 ? 'left' : 'right';
-      spawnParticle(side, colors[i % colors.length]);
-    }, i * 30);
-  }
-}
-
-function spawnParticle(side, color) {
-  const el = document.createElement('div');
-  const size = 6 + Math.random() * 7;
-  const shapes = ['50%', '0%', '20%']; // circle, square, rounded square
-  const shape = shapes[Math.floor(Math.random() * shapes.length)];
-
-  // Start Y: random vertical position along screen
-  const startY = 20 + Math.random() * 60; // % from top
-
-  Object.assign(el.style, {
-    position: 'fixed',
-    width: size + 'px',
-    height: size + 'px',
-    borderRadius: shape,
-    background: color,
-    top: startY + '%',
-    [side]: '0px',
-    zIndex: '9999',
-    pointerEvents: 'none',
-    opacity: '1',
-  });
-  document.body.appendChild(el);
-
-  // Physics
-  const dir    = side === 'left' ? 1 : -1;
-  const vx     = dir * (6 + Math.random() * 10);
-  const vy     = -6 + Math.random() * 12;
-  const gravity = 0.18;
-  const spin   = (Math.random() - 0.5) * 15;
-  let x = 0, y = 0, angle = 0, frame = 0, opacity = 1;
-
-  function step() {
-    x += vx;
-    y += vy + gravity * frame;
-    angle += spin;
-    opacity -= 0.022;
-    frame++;
-    el.style.transform = `translate(${x}px, ${y}px) rotate(${angle}deg)`;
-    el.style.opacity = Math.max(0, opacity);
-    if (opacity > 0) {
-      requestAnimationFrame(step);
-    } else {
-      el.remove();
+function startAdReload() {
+  setInterval(() => {
+    const frame = document.getElementById('ad-frame');
+    if (frame) {
+      // Reset src to force reload without touching the game
+      frame.src = frame.src;
     }
-  }
-  requestAnimationFrame(step);
+  }, 30000);
 }
 
 // ─────────────────────────────────────────────
@@ -1130,6 +1017,11 @@ function initLevel(level) {
   history = [];
   gameWon = false;
 
+  // Reset hint cooldown for new level
+  clearInterval(hintCooldownInterval);
+  const hintBtn = document.getElementById('hint-btn');
+  if (hintBtn) { hintBtn.classList.remove('cooldown'); hintBtn.textContent = '💡 Hint'; }
+
   document.getElementById('level-num').textContent = level;
   document.getElementById('win-overlay').classList.remove('show');
 
@@ -1153,6 +1045,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const data = loadProgress();
   currentLevel = data.highestUnlocked || 1;
   initLevel(currentLevel);
+  startAdReload();
 });
 </script>
 </body>
